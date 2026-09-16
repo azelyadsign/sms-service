@@ -17,6 +17,7 @@ final class SmsLog extends Dto
         public readonly ?string $rawResponse,
         public readonly ?string $createdAt,
         public readonly ?string $updatedAt,
+        public readonly ?SmsDevice $device = null,
     ) {
     }
 
@@ -33,7 +34,29 @@ final class SmsLog extends Dto
             rawResponse: isset($data['raw_response']) ? (string) $data['raw_response'] : null,
             createdAt: isset($data['created_at']) ? (string) $data['created_at'] : null,
             updatedAt: isset($data['updated_at']) ? (string) $data['updated_at'] : null,
+            // Only present in list/conversation responses — GET /sms/{id} omits it.
+            device: is_array($data['device'] ?? null) ? SmsDevice::fromArray($data['device']) : null,
         );
+    }
+
+    /**
+     * Serialize with the nested device flattened, keeping the camelCase keys.
+     */
+    public function toArray(): array
+    {
+        return [
+            'id' => $this->id,
+            'phone' => $this->phone,
+            'message' => $this->message,
+            'direction' => $this->direction,
+            'deviceType' => $this->deviceType,
+            'status' => $this->status,
+            'externalId' => $this->externalId,
+            'rawResponse' => $this->rawResponse,
+            'createdAt' => $this->createdAt,
+            'updatedAt' => $this->updatedAt,
+            'device' => $this->device?->toArray(),
+        ];
     }
 
     /**

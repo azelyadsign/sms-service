@@ -3,6 +3,8 @@
 namespace Azelya\SmsService\Sms;
 
 use Azelya\SmsService\Dto\DeliveryAck;
+use Azelya\SmsService\Dto\PaginatedSms;
+use Azelya\SmsService\Dto\SmsConversation;
 use Azelya\SmsService\Dto\SmsLog;
 use Azelya\SmsService\Enum\DeviceType;
 use Azelya\SmsService\Http\ApiClient;
@@ -10,7 +12,7 @@ use Azelya\SmsService\Http\AuthMode;
 use Azelya\SmsService\Support\SmsStatusPoller;
 
 /**
- * SMS endpoints: /sms/send, /sms/{id}, /sms/{id}/retry.
+ * SMS endpoints: /sms, /sms/send, /sms/{id}, /sms/{id}/conversation, /sms/{id}/retry.
  */
 final class SmsService
 {
@@ -21,6 +23,9 @@ final class SmsService
     /**
      * Queue an SMS for delivery. Returns immediately (202); the message is
      * delivered asynchronously — poll with get()/waitForStatus().
+     *
+     * Throws ValidationException (errors under "device_type") when the user
+     * has no active device that can deliver the message.
      */
     public function send(string $phone, string $message, DeviceType|string|null $deviceType = null): DeliveryAck
     {
@@ -36,6 +41,35 @@ final class SmsService
         $body = $this->api->request('POST', '/sms/send', ['json' => $payload], AuthMode::Bearer);
 
         return DeliveryAck::fromArray($body);
+    }
+
+    /**
+     * List the authenticated user's messages, newest first, each with the
+     * device that handled it.
+     *
+     * @param  array<string, mixed>  $query  Supported: page, per_page.
+     */
+    public function list(array $query = []): PaginatedSms
+    {
+        $body = $this->api->request(
+            'GET',
+            '/sms',
+            $query === [] ? [] : ['query' => $query],
+            AuthMode::Bearer,
+        );
+
+        return PaginatedSms::fromArray($body);
+    }
+
+    /**
+     * Fetch a sent message together with the replies it received (matched
+     * by external_id, oldest first).
+     */
+    public function conversation(string $smsLogId): SmsConversation
+    {
+        $body = $this->api->request('GET', '/sms/'.$smsLogId.'/conversation', [], AuthMode::Bearer);
+
+        return SmsConversation::fromArray($body);
     }
 
     /**

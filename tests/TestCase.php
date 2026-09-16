@@ -129,6 +129,24 @@ abstract class TestCase extends BaseTestCase
     }
 
     /**
+     * Default device attributes of the gateway's DeviceTokenResource.
+     *
+     * @param  array<string, mixed>  $overrides
+     * @return array<string, mixed>
+     */
+    protected function deviceAttributes(array $overrides = []): array
+    {
+        return array_merge([
+            'id' => 'device-1',
+            'name' => 'Galaxy S22',
+            'type' => 'android',
+            'token' => 'static-device-token-123',
+            'is_active' => true,
+            'created_at' => '2026-08-12T10:00:00.000000Z',
+        ], $overrides);
+    }
+
+    /**
      * The JSON:API device resource {data: {id, type, attributes}}.
      *
      * @param  array<string, mixed>  $attributeOverrides
@@ -136,14 +154,7 @@ abstract class TestCase extends BaseTestCase
      */
     protected function deviceResource(array $attributeOverrides = []): array
     {
-        $attributes = array_merge([
-            'id' => 'device-1',
-            'name' => 'Galaxy S22',
-            'type' => 'android',
-            'token' => 'static-device-token-123',
-            'is_active' => true,
-            'created_at' => '2026-08-12T10:00:00.000000Z',
-        ], $attributeOverrides);
+        $attributes = $this->deviceAttributes($attributeOverrides);
 
         return [
             'data' => [
@@ -151,6 +162,124 @@ abstract class TestCase extends BaseTestCase
                 'type' => 'device-tokens',
                 'attributes' => $attributes,
             ],
+        ];
+    }
+
+    /**
+     * A JSON:API device collection body ({data: [...]}) as returned by
+     * GET /user/devices. One attribute set per device; an empty list yields
+     * an empty collection.
+     *
+     * @param  array<int, array<string, mixed>>  $attributeOverridesList
+     * @return array<string, mixed>
+     */
+    protected function deviceCollection(array $attributeOverridesList = []): array
+    {
+        $resources = [];
+
+        foreach ($attributeOverridesList as $overrides) {
+            $attributes = $this->deviceAttributes($overrides);
+            $resources[] = [
+                'id' => $attributes['id'],
+                'type' => 'device-tokens',
+                'attributes' => $attributes,
+            ];
+        }
+
+        return ['data' => $resources];
+    }
+
+    /**
+     * A paginated JSON:API device collection body as returned by
+     * GET /admin/devices.
+     *
+     * @param  array<int, array<string, mixed>>  $attributeOverridesList
+     * @param  array<string, mixed>  $overrides  Keys merged at the top level (e.g. a links override).
+     * @return array<string, mixed>
+     */
+    protected function paginatedDevicesBody(array $attributeOverridesList = [], array $overrides = []): array
+    {
+        $collection = $this->deviceCollection($attributeOverridesList);
+
+        return array_merge([
+            'data' => $collection['data'],
+            'links' => [
+                'first' => 'https://smsgate.test/api/v1/admin/devices?page=1',
+                'last' => 'https://smsgate.test/api/v1/admin/devices?page=1',
+                'prev' => null,
+                'next' => null,
+            ],
+            'meta' => [
+                'current_page' => 1,
+                'last_page' => 1,
+                'per_page' => 15,
+                'total' => count($collection['data']),
+            ],
+        ], $overrides);
+    }
+
+    /**
+     * The nested device data ({id, name, type}) attached to SMS logs by the
+     * list and conversation endpoints.
+     *
+     * @param  array<string, mixed>  $overrides
+     * @return array<string, mixed>
+     */
+    protected function smsDeviceData(array $overrides = []): array
+    {
+        return array_merge([
+            'id' => 'device-1',
+            'name' => 'Galaxy S22',
+            'type' => 'android',
+        ], $overrides);
+    }
+
+    /**
+     * A plain Laravel paginator body as returned by GET /sms.
+     *
+     * @param  array<int, array<string, mixed>>  $logOverridesList  One smsLogBody() override set per entry.
+     * @param  array<string, mixed>  $overrides  Keys merged at the top level (e.g. total, next_page_url).
+     * @return array<string, mixed>
+     */
+    protected function paginatedSmsBody(array $logOverridesList = [], array $overrides = []): array
+    {
+        $data = array_map(
+            fn (array $logOverrides): array => $this->smsLogBody($logOverrides),
+            $logOverridesList,
+        );
+
+        return array_merge([
+            'current_page' => 1,
+            'data' => $data,
+            'first_page_url' => 'https://smsgate.test/api/v1/sms?page=1',
+            'from' => 1,
+            'last_page' => 1,
+            'last_page_url' => 'https://smsgate.test/api/v1/sms?page=1',
+            'links' => [],
+            'next_page_url' => null,
+            'path' => 'https://smsgate.test/api/v1/sms',
+            'per_page' => 15,
+            'prev_page_url' => null,
+            'to' => count($data),
+            'total' => count($data),
+        ], $overrides);
+    }
+
+    /**
+     * The {sms, replies} body returned by GET /sms/{id}/conversation.
+     *
+     * @param  array<string, mixed>  $smsOverrides
+     * @param  array<int, array<string, mixed>>  $replyOverridesList
+     * @return array<string, mixed>
+     */
+    protected function smsConversationBody(array $smsOverrides = [], array $replyOverridesList = []): array
+    {
+        return [
+            'sms' => $this->smsLogBody($smsOverrides),
+            'replies' => array_map(
+                fn (array $replyOverrides): array => $this->smsLogBody($replyOverrides),
+                $replyOverridesList,
+            ),
         ];
     }
 

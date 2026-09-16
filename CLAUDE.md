@@ -33,10 +33,10 @@ There is no pint/Laravel in this package — keep code PSR-12 clean manually.
 $sms = new SmsGatewayClient(Config|array $config, ?TokenStore, ?ClientInterface $http);
 $sms->auth();          // AuthService      — register/login/logout + appRegister/appLogin/appLogout
 $sms->user();          // UserService      — me()
-$sms->sms();           // SmsService       — send/get/retry/sendAndWait/waitForStatus
-$sms->devices();       // UserDeviceService     — user device CRUD (bearer)
+$sms->sms();           // SmsService       — send/list/get/conversation/retry/sendAndWait/waitForStatus
+$sms->devices();       // UserDeviceService     — user multi-device CRUD: list/create/get/delete (bearer)
 $sms->deviceGateway(); // DeviceGatewayService  — broadcasting auth, reply, status (X-Device-Token)
-$sms->admin();         // AdminService     — listUsers/approve/revoke
+$sms->admin();         // AdminService     — listUsers/approve/revoke + listDevices/setDeviceActive
 $sms->getToken() / setToken() / forgetToken();
 ```
 
@@ -44,7 +44,7 @@ $sms->getToken() / setToken() / forgetToken();
 - **`src/Http/AuthMode.php`** — `None` (login/register), `Bearer` (API consumers), `Device` (`X-Device-Token` header for gateway device endpoints).
 - **`src/Config.php`** — immutable; `fromArray()`/`toArray()` use snake_case keys (matches the Laravel config). `credentials()`: app pair takes precedence over user pair.
 - **`src/TokenStore/`** — `FileTokenStore` (default, temp dir), `ArrayTokenStore` (workers), plus `src/Laravel/CacheTokenStore`.
-- **`src/Dto/`** — readonly DTOs (`User`, `AuthResponse`, `SmsLog`, `Device`, `DeviceAuth`, `DeliveryAck`, `PaginatedUsers`). Dates stay raw ISO strings. `SmsLog::isPending()/isFinal()`; flat JSON from `GET /sms/{id}` vs JSON:API `{data: {id, type, attributes}}` elsewhere.
+- **`src/Dto/`** — readonly DTOs (`User`, `AuthResponse`, `SmsLog`, `SmsDevice`, `SmsConversation`, `Device`, `DeviceAuth`, `DeliveryAck`, `PaginatedUsers`, `PaginatedDevices`, `PaginatedSms`). Dates stay raw ISO strings. `SmsLog::isPending()/isFinal()`. Three body shapes: flat (`GET /sms/{id}`, no `device` key), plain Laravel paginator (`GET /sms` — top-level `total`/`next_page_url`, handled by `PaginatedSms`), JSON:API `{data: {id, type, attributes}}` (devices, users, admin collections). `SmsLog::$device` (`SmsDevice`) is only present in list/conversation responses.
 - **`src/Exception/`** — all extend `SmsGatewayException` (`statusCode()`, `context`): 401→`AuthenticationException`, 403→`PermissionDeniedException`, 404→`NotFoundException`, 409→`ConflictException`, 422→`ValidationException` (has `errors()`/`errorsFor()`), 429→`RateLimitException` (`retryAfter()`), plus `NetworkException`, `InvalidResponseException`, `SmsTimeoutException`.
 - **`src/Support/SmsStatusPoller.php`** — polls until status != `pending`. **Stops at the first non-pending status** (`sent` is final — mirrors the gateway job's own semantics). Units: deadline is `hrtime()` **nanoseconds**, `usleep()` takes **microseconds** — a previous nano/micro mixup made polls sleep 10s; keep `MICROS_PER_SECOND` for the interval.
 - **`src/Laravel/`** — `SmsServiceProvider` (singleton `SmsGatewayClient`, merges/publishes `config/azelya-sms.php`, `CacheTokenStore`), `Facades\AzelyaSms`. Only loaded when Laravel runs.
@@ -57,10 +57,13 @@ $sms->getToken() / setToken() / forgetToken();
 
 ### Gateway API quirks the SDK handles (verified against smsgate source)
 
-- `POST /user/device` returns a **top-level array** `[{data: {...}}]` — `UserDeviceService::extractDevice()` unwraps defensively.
-- `GET /sms/{id}` returns **flat JSON**, not JSON:API — `SmsLog::fromArray()` takes the body directly.
+- `/user/devices` is **plural multi-device CRUD**: list is a JSON:API collection `{data:[...]}` that is NOT paginated; `POST` always creates a NEW device (201 single resource, random 32-char token) — there is no update path; show/delete take the device id (`GET|DELETE /user/devices/{id}`).
+- `device_type` is a **free-form `alpha_dash` string** (min 3 chars) — `DeviceType` is convenience only, every signature also accepts a plain string.
+- `GET /sms` returns a **plain Laravel paginator** (`total`, `current_page`, `next_page_url`, `links[]` array) — unlike the JSON:API admin collections (`links` object + `meta`). `PaginatedSms` reads the top-level keys; `PaginatedDevices`/`PaginatedUsers` read `links`/`meta`.
+- `GET /sms/{id}` returns **flat JSON without `device`**; `/sms` list items and `/sms/{id}/conversation` include `device: {id, name, type}` — `SmsLog::fromArray()` handles all three.
+- `POST /sms/send` → **422 when the user has no active device** (errors under `device_type`). `PATCH /admin/devices/{id}` requires an explicit `is_active` boolean.
 - Gateway throttles: register 6/min, SMS 30/min → 429s surface as `RateLimitException`, never auto-retried.
-- New `/register` users have no role → 403 on SMS until `admin()->approve()`; `/app/register` (AppClient) can send immediately.
+- New `/register` users have no role → 403 on SMS **and device endpoints** until `admin()->approve()`; `/app/register` (AppClient) can send immediately.
 - smsgate's own feature tests are partially stale (android→device rename, PATCH admin routes) — trust `routes/api.php` + controllers in the smsgate repo, not its tests.
 
 ## Testing conventions
@@ -69,7 +72,7 @@ All tests are offline via Guzzle `MockHandler` — see `tests/TestCase.php` for 
 
 - `$this->queue->append($this->jsonResponse(...))` — FIFO mock responses; **queue must not run dry** (empty queue throws).
 - `$this->client(Config, ?TokenStore)` — builds a client wired with `Middleware::history($this->history)`; use `$this->lastRequest()` / `$this->requestBody()` to assert method, path, headers, payload.
-- Fixture builders: `$this->authBody()`, `$this->userResource()`, `$this->smsLogBody()`, `$this->deviceResource()`, `$this->error()`.
+- Fixture builders: `$this->authBody()`, `$this->userResource()`, `$this->smsLogBody()`, `$this->deviceResource()`/`$this->deviceAttributes()`/`$this->deviceCollection()`/`$this->paginatedDevicesBody()`, `$this->smsDeviceData()`/`$this->paginatedSmsBody()`/`$this->smsConversationBody()`, `$this->error()`. Two pagination fixtures exist because the gateway has two pagination formats.
 - `tests/Laravel/CacheTokenStoreTest.php` is `markTestSkipped` when Illuminate is absent (it is, in this repo — those 2 skips are expected).
 - PHPUnit 11: use `#[DataProvider]` attributes, not doc-comment annotations (deprecated).
 

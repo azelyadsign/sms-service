@@ -9,8 +9,8 @@ use Azelya\SmsService\Http\ApiClient;
 use Azelya\SmsService\Http\AuthMode;
 
 /**
- * The authenticated user's registered device (/user/device). One device per
- * user; the gateway generates the device token.
+ * The authenticated user's registered devices (/user/devices). A user may
+ * register multiple devices; the gateway generates a token for each one.
  */
 final class UserDeviceService
 {
@@ -19,22 +19,42 @@ final class UserDeviceService
     }
 
     /**
-     * Fetch the registered device. Throws NotFoundException when none exists.
+     * List all devices registered to the authenticated user. The gateway
+     * returns a JSON:API collection that is NOT paginated.
+     *
+     * @return Device[]
      */
-    public function get(): Device
+    public function list(): array
     {
-        $body = $this->api->request('GET', '/user/device', [], AuthMode::Bearer);
+        $body = $this->api->request('GET', '/user/devices', [], AuthMode::Bearer);
 
-        return $this->extractDevice($body);
+        $resources = $body['data'] ?? null;
+
+        if (! is_array($resources)) {
+            throw new InvalidResponseException('The SMS gateway did not return a device collection.');
+        }
+
+        $devices = [];
+
+        foreach ($resources as $resource) {
+            if (is_array($resource)) {
+                $devices[] = Device::fromResource($resource);
+            }
+        }
+
+        return $devices;
     }
 
     /**
-     * Register or update the device. The gateway generates a fresh token on
-     * every call — the returned Device carries it.
+     * Register an additional device for the authenticated user. Always
+     * creates a new device (never updates); the gateway generates the token.
+     *
+     * @param  DeviceType|string  $type  Any alpha_dash string of at least 3
+     *                                   characters ('android', 'ios', 'galaxy-s22', ...).
      */
     public function create(string $name, DeviceType|string $type): Device
     {
-        $body = $this->api->request('POST', '/user/device', [
+        $body = $this->api->request('POST', '/user/devices', [
             'json' => [
                 'name' => $name,
                 'type' => $type instanceof DeviceType ? $type->value : $type,
@@ -45,29 +65,36 @@ final class UserDeviceService
     }
 
     /**
-     * Remove the registered device.
+     * Fetch a specific device of the authenticated user. Throws
+     * NotFoundException when the id is unknown and PermissionDeniedException
+     * for another user's device.
      */
-    public function delete(): void
+    public function get(string $deviceId): Device
     {
-        $this->api->request('DELETE', '/user/device', [], AuthMode::Bearer);
+        $body = $this->api->request('GET', '/user/devices/'.$deviceId, [], AuthMode::Bearer);
+
+        return $this->extractDevice($body);
     }
 
     /**
-     * The gateway wraps the device resource of the create endpoint in a
-     * top-level array ([{data: {...}}]) while the show endpoint does not.
-     * Unwrap defensively so both shapes survive.
+     * Remove a specific device of the authenticated user.
+     */
+    public function delete(string $deviceId): void
+    {
+        $this->api->request('DELETE', '/user/devices/'.$deviceId, [], AuthMode::Bearer);
+    }
+
+    /**
+     * Unwrap the JSON:API device resource ({data: {...}}) returned by the
+     * show/create endpoints.
      *
      * @param  array<string, mixed>  $body
      */
     private function extractDevice(array $body): Device
     {
-        if (isset($body[0]) && is_array($body[0])) {
-            $body = $body[0];
-        }
-
         $resource = $body['data'] ?? null;
 
-        if (! is_array($resource)) {
+        if (! is_array($resource) || isset($resource[0])) {
             throw new InvalidResponseException('The SMS gateway did not return a device resource.');
         }
 
